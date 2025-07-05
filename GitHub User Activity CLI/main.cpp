@@ -7,6 +7,8 @@
 #include <memory>
 #include <stdexcept>
 #include <array>
+#include "json.hpp"
+using json = nlohmann::json;
 
 std::string fetchGitHubActivity(const std::string& url) {
     std::string command = "curl -s -H \"User-Agent: Cpp-App\" \"" + url + "\"";
@@ -23,37 +25,30 @@ std::string fetchGitHubActivity(const std::string& url) {
     return result;
 }
 
-// use jq to parse the JSON output from the GitHub API
-std::string parseGitHubEventsWithJQ(const std::string& json) {
-    char tempPath[MAX_PATH];
-    DWORD pathLen = GetTempPathA(MAX_PATH, tempPath);
-    if (pathLen == 0 || pathLen > MAX_PATH) {
-        throw std::runtime_error("Failed to get temp path");
-    }
-
-    std::string tempFile = std::string(tempPath) + "github_events.json";
-    
-    FILE* file = fopen(tempFile.c_str(), "w");
-    if (!file) throw std::runtime_error("Failed to create temp file");
-
-    fputs(json.c_str(), file);
-    fclose(file);
-
-    // use jq to format the output
-    std::string command = "jq -r \".[] | .type + \\\" on \\\" + (.repo.name // \\\"unknown repo\\\")\" \"" + tempFile + "\"";
-    std::array<char, 128> buffer;
+// native parser
+std::string parseGitHubEvents(const std::string& jsonString) {
     std::string result;
 
-    std::shared_ptr<FILE> pipe(popen(command.c_str(), "r"), pclose);
-    if (!pipe) throw std::runtime_error("jq popen() failed!");
-
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += "- ";
-        result += buffer.data();
+    try {
+        json j = json::parse(jsonString);
+        for (const auto& event : j) {
+            std::string type = event.value("type", "UnknownEvent");
+            std::string repo = event.contains("repo") ? event["repo"].value("name", "unknown repo") : "unknown repo";
+            
+            if (type == "PushEvent") {
+                result += "- Pushed commits to " + repo + "\n";
+            } else if (type == "CreateEvent") {
+                result += "- Created something in " + repo + "\n";   
+            }
+        }
+    } catch (const std::exception& e) {
+        result = "Error parsing JSON: ";
+        result += e.what();
     }
 
     return result;
 }
+
 
 int main(int argc, char* argv[]) {
     // check if the number of arguments is correct
@@ -78,7 +73,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        std::string parsed = parseGitHubEventsWithJQ(json);
+        std::string parsed = parseGitHubEvents(json);
         std::cout << "Recent GitHub Activity:" << parsed << std::endl;
     } catch (const std::exception& ex) {
         std::cerr << "Exception: " << ex.what() << std::endl;
